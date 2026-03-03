@@ -5,6 +5,7 @@ const DAYS_SHORT = ["LUN", "MAR", "MER", "JEU", "VEN"];
 const HOURS = [
   "08:15",
   "09:15",
+  "10:15",
   "10:30",
   "11:30",
   "12:30",
