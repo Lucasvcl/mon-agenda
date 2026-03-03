@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+/* eslint-disable no-unused-vars */
+import { useState, useEffect } from "react";
 
 const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"];
 const DAYS_SHORT = ["LUN", "MAR", "MER", "JEU", "VEN"];
@@ -61,14 +62,16 @@ function formatDate(date) {
   return date.toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
 }
 
-const STORAGE_KEY = "agenda-cours-v1";
+const STORAGE_KEY = "agenda-cours-v2";
 
 function loadData() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : { courses: [], completions: {} };
+    return raw
+      ? JSON.parse(raw)
+      : { courses: [], completions: {}, weekLabels: {}, notes: {} };
   } catch {
-    return { courses: [], completions: {} };
+    return { courses: [], completions: {}, weekLabels: {}, notes: {} };
   }
 }
 
@@ -78,7 +81,6 @@ function saveData(data) {
   } catch {}
 }
 
-// Modal component
 function Modal({ children, onClose }) {
   return (
     <div
@@ -102,8 +104,10 @@ function Modal({ children, onClose }) {
           borderRadius: "16px",
           padding: "28px",
           width: "100%",
-          maxWidth: "440px",
+          maxWidth: "460px",
           boxShadow: "0 25px 50px rgba(0,0,0,0.2)",
+          maxHeight: "90vh",
+          overflowY: "auto",
         }}
       >
         {children}
@@ -115,17 +119,19 @@ function Modal({ children, onClose }) {
 export default function App() {
   const [data, setData] = useState(() => loadData());
   const [currentWeek, setCurrentWeek] = useState(() => getWeekId(new Date()));
-  const [modal, setModal] = useState(null); // null | { type: 'add', dayIdx, hour } | { type: 'edit', course }
+  const [modal, setModal] = useState(null);
   const [form, setForm] = useState({
     name: "",
     colorIdx: 0,
     dayIdx: 0,
-    startHour: "08:00",
-    endHour: "09:00",
+    startHour: "08:15",
+    endHour: "09:15",
     recurring: true,
   });
-  const [activeTab, setActiveTab] = useState("week"); // 'week' | 'list'
+  const [activeTab, setActiveTab] = useState("week");
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [editingWeekLabel, setEditingWeekLabel] = useState(false);
+  const [weekLabelForm, setWeekLabelForm] = useState({ num: "", name: "" });
 
   const weekDates = getWeekDates(currentWeek);
 
@@ -133,14 +139,41 @@ export default function App() {
     saveData(data);
   }, [data]);
 
-  // Get courses visible this week (recurring or created this specific week)
-  function getCoursesForCell(dayIdx, hour) {
-    return data.courses.filter((c) => {
-      if (c.dayIdx !== dayIdx) return false;
-      if (c.startHour > hour || c.endHour <= hour) return false;
-      if (c.recurring) return true;
-      return c.weekId === currentWeek;
+  function getWeekLabel(weekId) {
+    return data.weekLabels && data.weekLabels[weekId]
+      ? data.weekLabels[weekId]
+      : null;
+  }
+
+  function saveWeekLabel() {
+    setData((d) => ({
+      ...d,
+      weekLabels: {
+        ...d.weekLabels,
+        [currentWeek]: { num: weekLabelForm.num, name: weekLabelForm.name },
+      },
+    }));
+    setEditingWeekLabel(false);
+  }
+
+  function openWeekLabelModal() {
+    const existing = getWeekLabel(currentWeek);
+    setWeekLabelForm({
+      num: existing ? existing.num : "",
+      name: existing ? existing.name : "",
     });
+    setEditingWeekLabel(true);
+  }
+
+  function getNoteKey(courseId, weekId) {
+    return `${courseId}__${weekId}`;
+  }
+  function getNote(courseId) {
+    const key = getNoteKey(courseId, currentWeek);
+    return data.notes && data.notes[key] ? data.notes[key] : "";
+  }
+  function hasNote(courseId) {
+    return !!getNote(courseId).trim();
   }
 
   function completionKey(courseId, weekId) {
@@ -164,7 +197,7 @@ export default function App() {
       colorIdx: 0,
       dayIdx,
       startHour: hour,
-      endHour: HOURS[HOURS.indexOf(hour) + 1] || "09:00",
+      endHour: HOURS[HOURS.indexOf(hour) + 1] || "09:15",
       recurring: true,
     });
     setModal({ type: "add" });
@@ -179,7 +212,7 @@ export default function App() {
       endHour: course.endHour,
       recurring: course.recurring,
     });
-    setModal({ type: "edit", course });
+    setModal({ type: "edit", course, note: getNote(course.id) });
   }
 
   function saveCourse() {
@@ -197,6 +230,7 @@ export default function App() {
       };
       setData((d) => ({ ...d, courses: [...d.courses, newCourse] }));
     } else {
+      const noteKey = getNoteKey(modal.course.id, currentWeek);
       setData((d) => ({
         ...d,
         courses: d.courses.map((c) =>
@@ -212,6 +246,7 @@ export default function App() {
               }
             : c,
         ),
+        notes: { ...d.notes, [noteKey]: modal.note || "" },
       }));
     }
     setModal(null);
@@ -242,8 +277,8 @@ export default function App() {
   };
 
   const isCurrentWeek = currentWeek === getWeekId(new Date());
+  const weekLabel = getWeekLabel(currentWeek);
 
-  // Calculate completion stats for the week
   const weekCourses = data.courses.filter(
     (c) => c.recurring || c.weekId === currentWeek,
   );
@@ -257,30 +292,6 @@ export default function App() {
   const progress =
     totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
-  // Get first and last hour that has a course
-  const allStartHours = data.courses.map((c) => c.startHour);
-  const allEndHours = data.courses.map((c) => c.endHour);
-  const minHourIdx =
-    allStartHours.length > 0
-      ? Math.max(0, HOURS.indexOf(allStartHours.sort()[0]) - 1)
-      : 0;
-  const maxHourIdx =
-    allEndHours.length > 0
-      ? Math.min(
-          HOURS.length - 1,
-          HOURS.indexOf(allEndHours.sort().reverse()[0]) + 1,
-        )
-      : HOURS.length - 1;
-  const visibleHours = HOURS.slice(minHourIdx, maxHourIdx + 1);
-
-  // Build grid: track which cells are "spanned" so we don't render them
-  function getCourseSpan(course) {
-    const start = HOURS.indexOf(course.startHour);
-    const end = HOURS.indexOf(course.endHour);
-    return Math.max(1, end - start);
-  }
-
-  // For each cell, find the "first hour" course (to render spanning block)
   function getFirstHourCourse(dayIdx, hour) {
     return data.courses.filter((c) => {
       if (c.dayIdx !== dayIdx) return false;
@@ -298,6 +309,12 @@ export default function App() {
       if (c.recurring) return true;
       return c.weekId === currentWeek;
     });
+  }
+
+  function getCourseSpan(course) {
+    const start = HOURS.indexOf(course.startHour);
+    const end = HOURS.indexOf(course.endHour);
+    return Math.max(1, end - start);
   }
 
   return (
@@ -378,7 +395,7 @@ export default function App() {
       <div
         style={{ maxWidth: "1200px", margin: "0 auto", padding: "24px 16px" }}
       >
-        {/* Week nav + stats */}
+        {/* Week nav */}
         <div
           style={{
             display: "flex",
@@ -389,7 +406,14 @@ export default function App() {
             gap: "12px",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "12px",
+              flexWrap: "wrap",
+            }}
+          >
             <button
               onClick={() => navWeek(-1)}
               style={{
@@ -407,22 +431,97 @@ export default function App() {
             >
               ‹
             </button>
+
             <div>
               <div
                 style={{
-                  fontWeight: "700",
-                  fontSize: "17px",
-                  letterSpacing: "-0.4px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  flexWrap: "wrap",
                 }}
               >
-                {isCurrentWeek
-                  ? "Cette semaine"
-                  : `Semaine ${currentWeek.split("-W")[1]}`}
+                {weekLabel ? (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                    }}
+                  >
+                    <span
+                      style={{
+                        background: "#111",
+                        color: "#fff",
+                        fontSize: "11px",
+                        fontWeight: "700",
+                        padding: "2px 8px",
+                        borderRadius: "99px",
+                        letterSpacing: "0.5px",
+                      }}
+                    >
+                      S{weekLabel.num}
+                    </span>
+                    <span
+                      style={{
+                        fontWeight: "700",
+                        fontSize: "17px",
+                        letterSpacing: "-0.4px",
+                      }}
+                    >
+                      {weekLabel.name}
+                    </span>
+                    {isCurrentWeek && (
+                      <span
+                        style={{
+                          fontSize: "11px",
+                          color: "#3B82F6",
+                          fontWeight: "600",
+                        }}
+                      >
+                        • Actuelle
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <span
+                    style={{
+                      fontWeight: "700",
+                      fontSize: "17px",
+                      letterSpacing: "-0.4px",
+                    }}
+                  >
+                    {isCurrentWeek
+                      ? "Cette semaine"
+                      : `Semaine calendaire ${currentWeek.split("-W")[1]}`}
+                  </span>
+                )}
+                <button
+                  onClick={openWeekLabelModal}
+                  style={{
+                    background: "none",
+                    border: "1.5px solid #E5E7EB",
+                    borderRadius: "8px",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                    padding: "3px 8px",
+                    color: "#9CA3AF",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "3px",
+                    fontWeight: "600",
+                  }}
+                >
+                  ✏️ {weekLabel ? "Modifier" : "Nommer"}
+                </button>
               </div>
-              <div style={{ fontSize: "12px", color: "#6B7280" }}>
+              <div
+                style={{ fontSize: "12px", color: "#6B7280", marginTop: "2px" }}
+              >
                 {formatDate(weekDates[0])} – {formatDate(weekDates[4])}
               </div>
             </div>
+
             <button
               onClick={() => navWeek(1)}
               style={{
@@ -459,7 +558,6 @@ export default function App() {
             )}
           </div>
 
-          {/* Progress */}
           {totalCount > 0 && (
             <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
               <div style={{ fontSize: "13px", color: "#6B7280" }}>
@@ -498,7 +596,6 @@ export default function App() {
         </div>
 
         {activeTab === "week" ? (
-          /* WEEK VIEW */
           <div
             style={{
               background: "#fff",
@@ -507,7 +604,6 @@ export default function App() {
               overflow: "hidden",
             }}
           >
-            {/* Day headers */}
             <div
               style={{
                 display: "grid",
@@ -563,7 +659,6 @@ export default function App() {
               ))}
             </div>
 
-            {/* Time grid */}
             {HOURS.map((hour, hIdx) => (
               <div
                 key={hour}
@@ -575,7 +670,6 @@ export default function App() {
                   minHeight: "52px",
                 }}
               >
-                {/* Hour label */}
                 <div
                   style={{
                     padding: "6px 8px 0",
@@ -594,7 +688,6 @@ export default function App() {
                     {hour}
                   </span>
                 </div>
-                {/* Day cells */}
                 {DAYS.map((_, dIdx) => {
                   const covered = isCovered(dIdx, hour);
                   const firstHourCourses = getFirstHourCourse(dIdx, hour);
@@ -647,6 +740,7 @@ export default function App() {
                         const span = getCourseSpan(course);
                         const color = COLORS[course.colorIdx % COLORS.length];
                         const done = isCompleted(course.id);
+                        const note = hasNote(course.id);
                         return (
                           <div
                             key={course.id}
@@ -697,33 +791,50 @@ export default function App() {
                                 {course.name}
                               </span>
                               <div
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  toggleCompletion(course.id);
-                                }}
                                 style={{
-                                  width: "18px",
-                                  height: "18px",
-                                  borderRadius: "5px",
-                                  flexShrink: 0,
-                                  border: `2px solid ${done ? color.bg : color.border}`,
-                                  background: done ? color.bg : "transparent",
                                   display: "flex",
+                                  flexDirection: "column",
                                   alignItems: "center",
-                                  justifyContent: "center",
-                                  cursor: "pointer",
-                                  transition: "all .15s",
+                                  gap: "3px",
+                                  flexShrink: 0,
                                 }}
                               >
-                                {done && (
+                                <div
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleCompletion(course.id);
+                                  }}
+                                  style={{
+                                    width: "18px",
+                                    height: "18px",
+                                    borderRadius: "5px",
+                                    border: `2px solid ${done ? color.bg : color.border}`,
+                                    background: done ? color.bg : "transparent",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    cursor: "pointer",
+                                    transition: "all .15s",
+                                  }}
+                                >
+                                  {done && (
+                                    <span
+                                      style={{
+                                        color: "#fff",
+                                        fontSize: "10px",
+                                        fontWeight: "700",
+                                      }}
+                                    >
+                                      ✓
+                                    </span>
+                                  )}
+                                </div>
+                                {note && (
                                   <span
-                                    style={{
-                                      color: "#fff",
-                                      fontSize: "10px",
-                                      fontWeight: "700",
-                                    }}
+                                    title="Note ajoutée"
+                                    style={{ fontSize: "9px", lineHeight: 1 }}
                                   >
-                                    ✓
+                                    📝
                                   </span>
                                 )}
                               </div>
@@ -750,7 +861,6 @@ export default function App() {
             ))}
           </div>
         ) : (
-          /* LIST VIEW */
           <div>
             {data.courses.length === 0 ? (
               <div
@@ -803,13 +913,14 @@ export default function App() {
                         .map((course) => {
                           const color = COLORS[course.colorIdx % COLORS.length];
                           const done = isCompleted(course.id);
+                          const note = getNote(course.id);
                           return (
                             <div
                               key={course.id}
                               style={{
                                 padding: "12px 16px",
                                 display: "flex",
-                                alignItems: "center",
+                                alignItems: "flex-start",
                                 gap: "12px",
                                 borderBottom: "1px solid #F9FAFB",
                               }}
@@ -821,6 +932,7 @@ export default function App() {
                                   background: color.bg,
                                   borderRadius: "99px",
                                   flexShrink: 0,
+                                  marginTop: "2px",
                                 }}
                               />
                               <div style={{ flex: 1 }}>
@@ -846,6 +958,21 @@ export default function App() {
                                   {course.startHour}–{course.endHour} ·{" "}
                                   {course.recurring ? "Récurrent" : "Une fois"}
                                 </div>
+                                {note && (
+                                  <div
+                                    style={{
+                                      fontSize: "12px",
+                                      color: "#374151",
+                                      marginTop: "6px",
+                                      background: "#F9FAFB",
+                                      padding: "6px 10px",
+                                      borderRadius: "8px",
+                                      borderLeft: `3px solid ${color.bg}`,
+                                    }}
+                                  >
+                                    📝 {note}
+                                  </div>
+                                )}
                               </div>
                               <div
                                 onClick={() => toggleCompletion(course.id)}
@@ -900,6 +1027,149 @@ export default function App() {
         )}
       </div>
 
+      {/* Week Label Modal */}
+      {editingWeekLabel && (
+        <Modal onClose={() => setEditingWeekLabel(false)}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "20px",
+            }}
+          >
+            <h2 style={{ margin: 0, fontSize: "17px", fontWeight: "700" }}>
+              Nommer cette semaine
+            </h2>
+            <button
+              onClick={() => setEditingWeekLabel(false)}
+              style={{
+                background: "none",
+                border: "none",
+                fontSize: "20px",
+                cursor: "pointer",
+                color: "#9CA3AF",
+              }}
+            >
+              ×
+            </button>
+          </div>
+          <div
+            style={{ display: "flex", flexDirection: "column", gap: "14px" }}
+          >
+            <div>
+              <label
+                style={{
+                  fontSize: "12px",
+                  fontWeight: "600",
+                  color: "#6B7280",
+                  letterSpacing: "0.5px",
+                  display: "block",
+                  marginBottom: "6px",
+                }}
+              >
+                NUMÉRO DE SEMAINE
+              </label>
+              <input
+                value={weekLabelForm.num}
+                onChange={(e) =>
+                  setWeekLabelForm((f) => ({ ...f, num: e.target.value }))
+                }
+                placeholder="Ex: 3, 4, S5..."
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  borderRadius: "10px",
+                  border: "1.5px solid #E5E7EB",
+                  fontSize: "14px",
+                  outline: "none",
+                  boxSizing: "border-box",
+                  fontFamily: "inherit",
+                }}
+              />
+            </div>
+            <div>
+              <label
+                style={{
+                  fontSize: "12px",
+                  fontWeight: "600",
+                  color: "#6B7280",
+                  letterSpacing: "0.5px",
+                  display: "block",
+                  marginBottom: "6px",
+                }}
+              >
+                NOM / SURNOM
+              </label>
+              <input
+                value={weekLabelForm.name}
+                onChange={(e) =>
+                  setWeekLabelForm((f) => ({ ...f, name: e.target.value }))
+                }
+                placeholder="Ex: Blocus, Vacances, Examen JS..."
+                onKeyDown={(e) => e.key === "Enter" && saveWeekLabel()}
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  borderRadius: "10px",
+                  border: "1.5px solid #E5E7EB",
+                  fontSize: "14px",
+                  outline: "none",
+                  boxSizing: "border-box",
+                  fontFamily: "inherit",
+                }}
+              />
+            </div>
+            <div
+              style={{
+                background: "#F0FDF4",
+                border: "1px solid #A7F3D0",
+                borderRadius: "10px",
+                padding: "10px 12px",
+                fontSize: "12px",
+                color: "#065F46",
+              }}
+            >
+              💡 Exemple : numéro <strong>3</strong> + nom{" "}
+              <strong>Blocus</strong> → affiche <strong>S3 · Blocus</strong>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: "8px", marginTop: "20px" }}>
+            <button
+              onClick={() => setEditingWeekLabel(false)}
+              style={{
+                flex: 1,
+                padding: "10px",
+                borderRadius: "10px",
+                border: "1.5px solid #E5E7EB",
+                background: "#fff",
+                fontWeight: "600",
+                fontSize: "13px",
+                cursor: "pointer",
+              }}
+            >
+              Annuler
+            </button>
+            <button
+              onClick={saveWeekLabel}
+              style={{
+                flex: 2,
+                padding: "10px",
+                borderRadius: "10px",
+                border: "none",
+                background: "#111",
+                color: "#fff",
+                fontWeight: "700",
+                fontSize: "13px",
+                cursor: "pointer",
+              }}
+            >
+              Enregistrer
+            </button>
+          </div>
+        </Modal>
+      )}
+
       {/* Add/Edit Modal */}
       {modal && (
         <Modal onClose={() => setModal(null)}>
@@ -932,7 +1202,6 @@ export default function App() {
           <div
             style={{ display: "flex", flexDirection: "column", gap: "14px" }}
           >
-            {/* Name */}
             <div>
               <label
                 style={{
@@ -951,8 +1220,7 @@ export default function App() {
                 onChange={(e) =>
                   setForm((f) => ({ ...f, name: e.target.value }))
                 }
-                placeholder="Ex: Mathématiques, Histoire..."
-                onKeyDown={(e) => e.key === "Enter" && saveCourse()}
+                placeholder="Ex: Mathématiques, Javascript..."
                 style={{
                   width: "100%",
                   padding: "10px 12px",
@@ -966,7 +1234,6 @@ export default function App() {
               />
             </div>
 
-            {/* Day */}
             <div>
               <label
                 style={{
@@ -1005,7 +1272,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Hours */}
             <div
               style={{
                 display: "grid",
@@ -1056,7 +1322,6 @@ export default function App() {
               ))}
             </div>
 
-            {/* Color */}
             <div>
               <label
                 style={{
@@ -1092,7 +1357,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Recurring */}
             <div
               style={{
                 display: "flex",
@@ -1140,6 +1404,53 @@ export default function App() {
                 />
               </button>
             </div>
+
+            {modal.type === "edit" && (
+              <div>
+                <label
+                  style={{
+                    fontSize: "12px",
+                    fontWeight: "600",
+                    color: "#6B7280",
+                    letterSpacing: "0.5px",
+                    display: "block",
+                    marginBottom: "6px",
+                  }}
+                >
+                  📝 NOTE (semaine en cours uniquement)
+                </label>
+                <textarea
+                  value={modal.note || ""}
+                  onChange={(e) =>
+                    setModal((m) => ({ ...m, note: e.target.value }))
+                  }
+                  placeholder="Ex: Fiche 1 ✓, reste fiche 2 à terminer..."
+                  rows={3}
+                  style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    borderRadius: "10px",
+                    border: "1.5px solid #E5E7EB",
+                    fontSize: "13px",
+                    outline: "none",
+                    boxSizing: "border-box",
+                    fontFamily: "inherit",
+                    resize: "vertical",
+                    lineHeight: "1.5",
+                  }}
+                />
+                <div
+                  style={{
+                    fontSize: "11px",
+                    color: "#9CA3AF",
+                    marginTop: "4px",
+                  }}
+                >
+                  La note change chaque semaine, elle ne s'applique qu'à la
+                  semaine affichée.
+                </div>
+              </div>
+            )}
           </div>
 
           <div style={{ display: "flex", gap: "8px", marginTop: "20px" }}>
@@ -1197,7 +1508,6 @@ export default function App() {
         </Modal>
       )}
 
-      {/* Confirm delete */}
       {confirmDelete && (
         <Modal onClose={() => setConfirmDelete(null)}>
           <div style={{ textAlign: "center" }}>
